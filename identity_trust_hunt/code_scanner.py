@@ -180,6 +180,22 @@ def scan_for_claim_access(
     return found
 
 
+def line_contains_any(line_text: str, needles: Iterable[str]) -> bool:
+    """Return True if ``line_text`` contains any of ``needles``.
+
+    Used by the v0.2 rule engine for the "line" guard scope — the
+    arrow-function predicate case (`.find((e) => e.primary && e.verified)`)
+    where the required guard must live INSIDE the same statement as the
+    access, not merely somewhere in the file. File-scope guards wave
+    through code where the guard sits a thousand lines away in a dead
+    branch; line-scope guards catch the real inline unsafe reads.
+    """
+    needle_list = tuple(needles)
+    if not needle_list:
+        return False
+    return any(n in line_text for n in needle_list)
+
+
 def file_contains_any(path: str, needles: Iterable[str]) -> bool:
     """Return True if the file at ``path`` contains any of ``needles``.
 

@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>PTB: Why nOAuth Is Not an Edge Case &middot; Abdalrahman Mohamed</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="description" content="Six identity vendors, seven days, one bug class. A field report on the Provider Trust Boundary framework and the tool that found it.">
+<style>
+  :root { color-scheme: light; }
+  html { background: #fafaf9; }
+  body {
+    max-width: 46rem;
+    margin: 2rem auto 6rem;
+    padding: 0 1.25rem;
+    font: 16px/1.65 ui-serif, Georgia, "Times New Roman", serif;
+    color: #1b1b1a;
+  }
+  h1 { font-size: 1.9rem; line-height: 1.25; margin: 0 0 .35em; letter-spacing: -.01em; }
+  h2 { font-size: 1.2rem; margin: 2.4em 0 .6em; letter-spacing: -.005em; }
+  h3 { font-size: 1.02rem; margin: 1.6em 0 .5em; color: #333; }
+  .byline { color: #6b6b68; font-size: .95rem; margin: 0 0 2.4em; }
+  .byline a { color: inherit; }
+  p { margin: 0 0 1.1em; }
+  code, pre { font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace; font-size: .9em; }
+  code { background: #efefed; padding: .08em .3em; border-radius: 3px; }
+  pre { background: #1b1b1a; color: #f5f5f1; padding: 1em 1.1em; border-radius: 5px; overflow-x: auto; line-height: 1.5; }
+  pre code { background: none; padding: 0; color: inherit; }
+  a { color: #1858a2; text-decoration: underline; text-underline-offset: .18em; }
+  a:hover { color: #0d3d75; }
+  table { border-collapse: collapse; margin: 1em 0 1.5em; font-size: .95rem; }
+  th, td { border-bottom: 1px solid #ddd; padding: .45em .75em; text-align: left; vertical-align: top; }
+  th { font-weight: 600; background: #efefed; }
+  blockquote {
+    border-left: 3px solid #1858a2;
+    margin: 1.4em 0;
+    padding: .4em 1.1em;
+    color: #333;
+    background: #f3f3f1;
+  }
+  .footer { color: #6b6b68; font-size: .9rem; margin-top: 3em; border-top: 1px solid #ddd; padding-top: 1em; }
+</style>
+</head>
+<body>
+
+<h1>PTB: Why nOAuth Is Not an Edge Case</h1>
+<p class="byline">
+  Abdalrahman Mohamed &middot; NEXUS Zone Research &middot; 2026-10-21 &middot;
+  <a href="https://github.com/61465/identity-trust-hunt">github.com/61465/identity-trust-hunt</a>
+</p>
+
+<h2>Six vendors in seven days</h2>
+
+<p>On 2026-10-14 I filed two CVSS 9.8 critical advisories against Supabase and Hanko for the same underlying bug: a Microsoft Azure OIDC consumer that reads the <code>email</code> claim without checking <code>xms_edov</code>. Both were accepted. Seven days later, running a scanner I had just written against the same contract class, I filed two more advisories (Documenso Critical, Auth.js High) and emailed two more vendors (Keycloak, Casdoor). Keycloak's Response Team acknowledged within hours. Six vendors, one bug class, one week.</p>
+
+<p>The 2024 writeup by Descope named this instance <em>nOAuth</em>. The reaction most writeups since have carried is &ldquo;this is a specific Microsoft Entra misconfiguration, patch and move on.&rdquo; This essay argues the opposite: nOAuth is one row in a class, the class spans every social-login provider shipping today, and the class has a static predicate you can scan for.</p>
+
+<h2>What nOAuth actually is</h2>
+
+<p>Microsoft Entra ID issues an <code>email_verified</code> claim on OIDC tokens. The claim reflects whether the token's <em>home tenant</em> considers that email verified. An attacker who creates a free Entra tenant <em>is</em> the home tenant for every user they add there. They can set <code>mail</code> to any address they want, mark it verified inside their tenant, and the resulting token carries <code>email_verified: true</code> that any consumer-side guard will trust.</p>
+
+<p>Microsoft published <code>xms_edov</code> (Email Domain Owner Verified) as the distinguishing signal. <code>xms_edov == "1"</code> is set only when Microsoft itself has verified that the email's domain belongs to the token's tenant. It is the authoritative email-ownership claim for the Microsoft identity ecosystem. Not using it is the entire bug.</p>
+
+<p>The pattern on the consumer side is one line of code:</p>
+
+<pre><code>const email = claims.email;              // trusts home-tenant verification only
+if (!claims.email_verified) throw ...;   // insufficient guard
+await linkOrCreateAccount({ email });    // attacker-controlled identity binding</code></pre>
+
+<p>Supabase, Hanko, Documenso, and Keycloak all shipped this shape. Casdoor shipped a variant where a generic <code>isGothEmailVerified()</code> helper applied the same insufficient check across every provider the <code>markbates/goth</code> library covers. Auth.js shipped a different adjacent instance: the GitHub provider trusts <code>primary: true</code> on <code>/user/emails</code> without checking <code>verified: true</code>.</p>
+
+<h2>From a specific bug to a framework</h2>
+
+<p>Finding the Microsoft case twice at Supabase and Hanko in one day told me the bug had an ancestor. Finding it again at four more vendors told me the ancestor had a class. The class is what I'm calling the <strong>Provider Trust Boundary</strong>:</p>
+
+<blockquote>
+  For a call site <code>c</code> in system <code>W</code> that reads claim <code>k</code> from identity provider <code>p</code>, let <code>V(p, k)</code> be the set of verification steps the provider's semantic contract requires. Then <code>c</code> is PTB-unsafe iff some <code>v</code> in <code>V(p, k)</code> is absent from the enclosing scope of <code>c</code>.
+</blockquote>
+
+<p>In plain English: every identity provider publishes a contract &mdash; often buried in a reference page nobody rereads &mdash; for how a consumer must guard each claim. nOAuth is the Microsoft/<code>email</code> row of that contract going unenforced. There are many other rows.</p>
+
+<p>Eight rows ship in the public dictionary of <a href="https://github.com/61465/identity-trust-hunt">identity-trust-hunt v0.1</a>:</p>
+
+<table>
+<thead>
+<tr><th>Provider</th><th>Claim</th><th>Required guard</th><th>Public reference</th></tr>
+</thead>
+<tbody>
+<tr><td>Microsoft Azure OIDC</td><td><code>email</code> / <code>mail</code></td><td><code>xms_edov == "1"</code></td><td>nOAuth 2024; GHSA-ffp4 Supabase; GHSA-2gvh Hanko</td></tr>
+<tr><td>Apple Sign in with Apple</td><td><code>email</code></td><td><code>email_verified</code> + <code>is_private_email</code> handled</td><td>Apple Developer: SIWA REST API</td></tr>
+<tr><td>Google OIDC</td><td><code>hd</code></td><td>allowed-domain pin</td><td>Google OIDC guidance</td></tr>
+<tr><td>Facebook Limited Login</td><td><code>email</code></td><td>JWT verified + <code>email_verified</code> branch</td><td>Meta Limited Login docs</td></tr>
+<tr><td>GitHub OAuth</td><td><code>email</code></td><td><code>verified: true</code> (not just <code>primary</code>)</td><td>GitHub /user/emails API; GHSA-x3fc Auth.js</td></tr>
+<tr><td>Discord OAuth</td><td><code>verified</code></td><td>strict equality <code>=== true</code></td><td>Discord Developer Portal</td></tr>
+<tr><td>LinkedIn OIDC</td><td><code>email</code></td><td>consumer-side email challenge (no <code>email_verified</code> field)</td><td>LinkedIn OIDC reference</td></tr>
+<tr><td>Twitter / X OAuth 2.0</td><td><code>email</code></td><td>revalidate before trust gate</td><td>X Developer Docs</td></tr>
+</tbody>
+</table>
+
+<p>The expanded dictionary &mdash; per-SDK handler patterns, deprecated-flow traps, locale variants &mdash; stays in the NEXUS Zone research artifact. The teaching edition is enough to apply the predicate against one provider at a time.</p>
+
+<h2>Why static scanning works</h2>
+
+<p>PTB consumers read a claim at a specific call site. The guard is either on that call site, in the enclosing function, or in the surrounding file. A text-level scanner can walk a codebase, find the access patterns for <code>claims.email</code> / <code>profile.mail</code> / <code>GET /user/emails</code>, and check whether the required guard pattern appears in reach. Nothing in that loop requires AST parsing, nothing requires execution, nothing requires an LLM. v0.1 is 500 lines of Python, 24 passing tests, zero runtime dependencies.</p>
+
+<p>Where static scanning stops being enough: taint-flow across modules (handler reads claim, calls a helper, helper is in another file, guard lives yet elsewhere); arrow-function predicates where the guard must live inline (<code>.find((e) =&gt; e.primary &amp;&amp; e.verified)</code>); and operator-configured flows where whether a guard runs depends on realm settings not source code (Keycloak's first-broker-login customization). Those are the v0.2 roadmap, retained from the public edition because recall improvement is the researcher's edge, not the audience's.</p>
+
+<p>What v0.1 catches it catches well: five of the six 2026-10-21 vendor findings started as a scanner hit, including a case (Documenso) that didn't appear in any of my prior manual recon notes. The scanner is the methodology's typing surface. The methodology is older than the scanner.</p>
+
+<h2>Four case studies</h2>
+
+<p><strong>Supabase (<code>GHSA-ffp4-94w6-vfgv</code>, CVSS 9.8, accepted 2026-10-14).</strong> The <code>IsEmailVerified()</code> helper in <code>api/provider/microsoft.go</code> checked <code>email_verified</code> only. The repository's Microsoft OIDC adapter targeted the common tenant endpoint by default. Together they shipped the nOAuth bug class in production. Fix landed in a two-line consumer-side <code>xms_edov</code> guard.</p>
+
+<p><strong>Hanko (<code>GHSA-2gvh-5vh3-m2rp</code>, CVSS 9.8, accepted 2026-10-14).</strong> Worse than Supabase: the Hanko adapter hard-set <code>emailVerified = true</code> without checking any claim at all. The code path was reachable through the exact same attacker-tenant OIDC flow. Same two-line fix shape.</p>
+
+<p><strong>Documenso (<code>GHSA-hm26-jm32-3wp4</code>, Critical, filed 2026-10-21, under triage).</strong> Found by the scanner. <code>packages/auth/server/lib/utils/handle-oauth-callback-url.ts</code> reads <code>claims.mail</code> after checking <code>email_verified</code> only; <code>MicrosoftAuthOptions</code> targets <code>login.microsoftonline.com/common</code>. The scanner matched the Microsoft Graph <code>mail</code> read against an absent <code>xms_edov</code> guard anywhere under <code>packages/auth/</code>. Manual verification confirmed the attack path before the GHSA shipped.</p>
+
+<p><strong>Auth.js (<code>GHSA-x3fc-mfpw-93f6</code>, High, filed 2026-10-21, under triage).</strong> Different provider, same class. <code>packages/core/src/providers/github.ts:171</code> reads <code>(emails.find((e) =&gt; e.primary) ?? emails[0]).email</code>. GitHub's <code>/user/emails</code> returns every email on the account including unverified secondaries. The find predicate gates on <code>primary</code> alone; <code>verified</code> is in the type definition and simply unused. A separate reporter already filed <a href="https://github.com/nextauthjs/next-auth/issues/13495">#13495</a> for the crash variant three months earlier; the PTB angle connects it to the Microsoft family.</p>
+
+<h2>Keycloak and Casdoor &mdash; email channels</h2>
+
+<p>Two vendors in the 2026-10-21 batch have GitHub private vulnerability reporting disabled. For Keycloak the correct channel is <code>keycloak-security@googlegroups.com</code>; for Casdoor it is <code>admin@casdoor.org</code>. Both reports went by email. Keycloak's Response Team acknowledged within 29 minutes and asked for credit attribution. A later reply pushed back on the severity &mdash; the default first-broker-login flow does ask the real account owner to verify ownership, so direct takeover of an existing user is blocked. The counter is that the <code>idp-create-user-if-unique</code> authenticator runs <em>before</em> that verification subflow in the default flow, and it creates a brand-new Keycloak user from an attacker-tenant Microsoft identity without any email challenge. The target is the <em>unregistered</em> email, not the existing user. Keycloak's architecture puts a 1:N multiplier on top of the base nOAuth bug because every downstream relying party of a Keycloak realm inherits the trusted email.</p>
+
+<h2>What this means for identity vendors</h2>
+
+<p>Three things, in increasing cost to implement.</p>
+
+<p><em>Audit your Microsoft OIDC adapter for <code>xms_edov</code>, today.</em> Grep <code>xms_edov</code> across your repository. If it does not appear in the file that extracts the email claim from a Microsoft token, you have the nOAuth bug class. The fix is one conditional in one function. The CVSS cost of shipping without it starts at 9.4 and goes up when a broker-chain multiplier is in play.</p>
+
+<p><em>Walk the eight-row table.</em> For each row your product consumes, locate the call site, locate the guard, and record either (a) &ldquo;guard is reachable from the call site under all flows&rdquo; or (b) &ldquo;the guard is not applied here &mdash; filing issue&rdquo;. The scan takes a day. For vendors with public source trees, <code>identity-trust-hunt scan</code> will do most of the grep automatically and will not false-positive on documentation strings.</p>
+
+<p><em>Treat each new social-login provider as a new row of <code>V(p, k)</code>.</em> When you add a provider, do not import its SDK and assume the SDK's defaults are safe. Read the provider's token reference, pick the claim your account layer trusts, locate the authoritative verification signal for that claim, and encode the required guard as a type-level invariant where you can. The time cost is an afternoon per provider. The reputational cost of a CVSS 9.8 that cites your product by name is substantially higher than one afternoon of senior engineering time.</p>
+
+<p>nOAuth is not an edge case. It is one row of a predicate class we now have the vocabulary to name, the dictionary to enumerate, and the tool to scan for.</p>
+
+<p class="footer">
+  Correspondence: <a href="mailto:abdarahman10555@gmail.com">abdarahman10555@gmail.com</a> &middot;
+  Public teaching edition: <a href="https://github.com/61465/identity-trust-hunt">github.com/61465/identity-trust-hunt</a> (MIT) &middot;
+  Related methodology: <a href="https://github.com/61465/apds-hunt">github.com/61465/apds-hunt</a>
+</p>
+
+</body>
+</html>

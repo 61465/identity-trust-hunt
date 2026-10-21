@@ -35,6 +35,14 @@ class ClaimContract:
         Textual patterns that must appear in the SAME file (anywhere) for
         the access to be considered PTB-safe. If none of the guards appear,
         the access is flagged.
+    guard_scope:
+        ``"file"`` (default — the v0.1 behavior) or ``"line"``. When
+        ``"line"``, a guard pattern must appear on the SAME source line
+        as the access. This catches arrow-function predicates like
+        ``.find((e) => e.primary && e.verified)`` where the guard must
+        live inside the statement, not merely in the enclosing file.
+        File-scope misses the Auth.js case (GHSA-x3fc-mfpw-93f6) because
+        the file imports GitHub types elsewhere; line-scope catches it.
     fp_risk:
         ``low`` / ``med`` / ``high`` — baseline false-positive risk when the
         detector fires with no cross-check. Expanded sink-sensitivity
@@ -49,6 +57,7 @@ class ClaimContract:
     required_guards: tuple[str, ...]
     fp_risk: str
     public_reference: str
+    guard_scope: str = "file"
 
 
 @dataclass(frozen=True)
@@ -97,6 +106,34 @@ PUBLIC_PROVIDERS: tuple[Provider, ...] = (
                 public_reference=(
                     "nOAuth (Descope 2024); GHSA-ffp4-94w6-vfgv Supabase; "
                     "GHSA-2gvh-5vh3-m2rp Hanko"
+                ),
+            ),
+            # v0.2 — Microsoft Graph /me surface. Keycloak and Documenso
+            # both consume Graph /me's `mail` field without going through
+            # the id_token claim set, so the first contract above does
+            # not fire. The Microsoft-specific `xms_edov` guard still
+            # has to be present somewhere in the handler to pass PTB.
+            ClaimContract(
+                claim="mail",
+                access_patterns=(
+                    "graph.microsoft.com/v1.0/me",
+                    "graph.microsoft.com/me",
+                    'profile.get("mail")',
+                    "profile.get('mail')",
+                    'getJsonProperty(profile, "mail")',
+                    "claims.mail",
+                    'claims["mail"]',
+                    "profile.mail",
+                ),
+                required_guards=(
+                    "xms_edov",
+                    "xmsEdov",
+                    "xms-edov",
+                ),
+                fp_risk="low",
+                public_reference=(
+                    "Microsoft Entra ID — xms_edov semantics on Graph /me; "
+                    "GHSA-hm26-jm32-3wp4 Documenso applied the same pattern"
                 ),
             ),
         ),
@@ -219,6 +256,35 @@ PUBLIC_PROVIDERS: tuple[Provider, ...] = (
                     "GitHub REST docs: /user/emails returns objects with "
                     "both `primary` and `verified`; consumers must gate "
                     "trust on `verified`, not `primary`"
+                ),
+            ),
+            # v0.2 — arrow-function predicate on `.find()` that filters by
+            # `primary` without ANDing `verified`. This is the Auth.js
+            # bug class (GHSA-x3fc-mfpw-93f6): the file imports GitHub
+            # SDK types and legitimately uses `.verified` elsewhere, so
+            # file-scope guard checks let the unsafe statement pass. The
+            # unsafe check must live on the SAME LINE as the access.
+            ClaimContract(
+                claim="primary",
+                access_patterns=(
+                    ".find((e) => e.primary)",
+                    ".find(e => e.primary)",
+                    ".find((e)=>e.primary)",
+                    ".find(e=>e.primary)",
+                    ".filter((e) => e.primary)",
+                    ".filter(e => e.primary)",
+                    ".filter((e)=>e.primary)",
+                ),
+                required_guards=(
+                    "e.verified",
+                    "&& e.verified",
+                    "&& verified",
+                ),
+                fp_risk="low",
+                guard_scope="line",
+                public_reference=(
+                    "GHSA-x3fc-mfpw-93f6 Auth.js: find((e) => e.primary) picks "
+                    "unverified secondaries; guard must AND `e.verified`"
                 ),
             ),
         ),

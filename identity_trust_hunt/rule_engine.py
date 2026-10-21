@@ -22,7 +22,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
-from .code_scanner import ClaimAccess, file_contains_any, scan_for_claim_access
+from .code_scanner import (
+    ClaimAccess,
+    file_contains_any,
+    line_contains_any,
+    scan_for_claim_access,
+)
 from .providers import PUBLIC_PROVIDERS, ClaimContract, Provider
 
 
@@ -63,20 +68,29 @@ def _evaluate_contract(
 ) -> list[PTBFinding]:
     """Evaluate one contract and return every PTB-unsafe access.
 
-    An access is UNSAFE when the file it sits in contains the access
-    pattern but contains NONE of the required-guard patterns anywhere in
-    its content. That matches the v0.1 approximation of
-    ``guards(c) = same-file guards``.
+    Guard-scope semantics:
+
+      - ``contract.guard_scope == "file"`` (v0.1 default): the file
+        containing the access must contain ANY required guard anywhere.
+        Catches most real-world cases; occasionally lets inline-arrow-
+        function unsafety pass because the file imports the type elsewhere.
+      - ``contract.guard_scope == "line"`` (v0.2): the required guard
+        must appear on the SAME SOURCE LINE as the access. Catches the
+        Auth.js-shape bug where ``.find((e) => e.primary)`` is unsafe
+        inline even though the surrounding file references ``.verified``.
     """
     accesses = scan_for_claim_access(target_root, contract.access_patterns)
     if not accesses:
         return []
 
+    scope = getattr(contract, "guard_scope", "file")
+
     # Precompute guard presence per file so we don't re-read a file for
-    # every access it contains.
+    # every access it contains (file-scope only; line-scope checks each
+    # access's own line text).
     guard_cache: dict[str, bool] = {}
 
-    def has_guard(path: str) -> bool:
+    def has_file_guard(path: str) -> bool:
         cached = guard_cache.get(path)
         if cached is not None:
             return cached
@@ -84,12 +98,16 @@ def _evaluate_contract(
         guard_cache[path] = resolved
         return resolved
 
+    def has_guard_for(access: ClaimAccess) -> bool:
+        if scope == "line":
+            return line_contains_any(access.line_text, contract.required_guards)
+        return has_file_guard(access.path)
+
     findings: list[PTBFinding] = []
     for access in accesses:
-        if has_guard(access.path):
-            # Guard present somewhere in the same file: v0.1 trusts it.
-            # The expanded engine checks guard-reaches-this-site via
-            # control flow and taint — retained.
+        if has_guard_for(access):
+            # Guard present under the configured scope: trust it.
+            # Expanded engine (taint flow across modules) is retained.
             continue
         confidence = _baseline_confidence(contract)
         rationale = (

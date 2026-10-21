@@ -26,6 +26,7 @@ from .code_scanner import (
     ClaimAccess,
     file_contains_any,
     line_contains_any,
+    path_weight,
     scan_for_claim_access,
 )
 from .providers import PUBLIC_PROVIDERS, ClaimContract, Provider
@@ -109,7 +110,10 @@ def _evaluate_contract(
             # Guard present under the configured scope: trust it.
             # Expanded engine (taint flow across modules) is retained.
             continue
-        confidence = _baseline_confidence(contract)
+        # v0.3 — multiply baseline confidence by the path's weight so
+        # tests/locales/stories/mocks surface at lower confidence than
+        # provider-handler code. Operators can filter via --min-confidence.
+        confidence = _baseline_confidence(contract) * path_weight(access.path)
         rationale = (
             f"PTB predicate: file {access.path!r} consumes "
             f"{contract.claim!r} from {provider.display_name} "

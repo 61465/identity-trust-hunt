@@ -5,7 +5,7 @@ Public teaching edition v0.1. Full methodology at
 https://github.com/61465/identity-trust-hunt/blob/main/docs/METHODOLOGY.md
 """
 
-__version__ = "0.1.0"
+__version__ = "0.3.0"
 __author__ = "NEXUS Zone Research"
 __email__ = "abdarahman10555@gmail.com"
 __license__ = "MIT"

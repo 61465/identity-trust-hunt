@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "identity-trust-hunt"
-version = "0.1.0"
+version = "0.3.0"
 description = "Reference implementation of the Provider Trust Boundary (PTB) framework. Audits social-login integrations for consumer-side trust gaps against per-provider semantic contracts."
 readme = "README.md"
 license = { text = "MIT" }

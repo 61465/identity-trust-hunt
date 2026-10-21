@@ -1,0 +1,45 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "identity-trust-hunt"
+version = "0.1.0"
+description = "Reference implementation of the Provider Trust Boundary (PTB) framework. Audits social-login integrations for consumer-side trust gaps against per-provider semantic contracts."
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "NEXUS Zone Research", email = "abdarahman10555@gmail.com" }]
+keywords = ["security", "oauth", "oidc", "identity", "trust-boundary", "noauth", "ptb", "social-login"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Security",
+  "Topic :: Software Development :: Quality Assurance",
+]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=7.0"]
+
+[project.scripts]
+identity-trust-hunt = "identity_trust_hunt.cli:main"
+
+[project.urls]
+Homepage = "https://github.com/61465/identity-trust-hunt"
+Methodology = "https://github.com/61465/identity-trust-hunt/blob/main/docs/METHODOLOGY.md"
+Issues = "https://github.com/61465/identity-trust-hunt/issues"
+
+[tool.setuptools.packages.find]
+include = ["identity_trust_hunt*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+addopts = "-ra --strict-markers"
